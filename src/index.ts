@@ -7,6 +7,7 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { GitService } from './git-service.js';
+import { GitCommit } from './types.js';
 
 class GitHistoryMCPServer {
   private server: Server;
@@ -17,7 +18,7 @@ class GitHistoryMCPServer {
     this.server = new Server(
       {
         name: 'git-history-mcp',
-        version: '0.1.0',
+        version: '0.2.0',
       },
       {
         capabilities: {
@@ -41,6 +42,15 @@ class GitHistoryMCPServer {
             name: 'Git Repository Status',
             description: 'Current git repository status, branch, and working directory changes',
           },
+          {
+            uri: 'git://commits',
+            mimeType: 'text/plain',
+            name: 'Recent Commits',
+            description: 'Recent commit history with messages, authors, and dates',
+            parameters: [
+              { name: 'limit', description: 'Maximum number of commits to show (default: 10)', required: false },
+            ],
+          },
         ],
       };
     });
@@ -48,25 +58,25 @@ class GitHistoryMCPServer {
     // Handle resource reading
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const { uri } = request.params;
+      const queryParams = new URLSearchParams(uri.split('?')[1] || '');
 
-      if (uri === 'git://status') {
-        try {
-          const repoInfo = await this.gitService.getRepositoryInfo();
-          
-          if (!repoInfo.isRepo) {
-            return {
-              contents: [
-                {
-                  uri,
-                  mimeType: 'text/plain',
-                  text: `Not a Git repository: ${repoInfo.path}`,
-                },
-              ],
-            };
-          }
+      try {
+        const repoInfo = await this.gitService.getRepositoryInfo();
+        
+        if (!repoInfo.isRepo) {
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: `Not a Git repository: ${repoInfo.path}`,
+              },
+            ],
+          };
+        }
 
+        if (uri === 'git://status') {
           const status = await this.gitService.getStatus();
-          
           const statusText = this.formatGitStatus(repoInfo, status);
           
           return {
@@ -78,20 +88,45 @@ class GitHistoryMCPServer {
               },
             ],
           };
-        } catch (error) {
+        }
+
+        if (uri.startsWith('git://commits')) {
+          const limitParam = queryParams.get('limit');
+          let limit = 10;
+          
+          if (limitParam) {
+            const parsedLimit = parseInt(limitParam, 10);
+            if (!isNaN(parsedLimit) && parsedLimit > 0) {
+              limit = parsedLimit;
+            }
+          }
+          
+          const commits = await this.gitService.getRecentCommits(limit);
+          const commitsText = this.formatCommitHistory(commits, limit);
+          
           return {
             contents: [
               {
                 uri,
                 mimeType: 'text/plain',
-                text: `Error reading Git status: ${error}`,
+                text: commitsText,
               },
             ],
           };
         }
-      }
 
-      throw new Error(`Unknown resource: ${uri}`);
+        throw new Error(`Unknown resource: ${uri}`);
+      } catch (error) {
+        return {
+          contents: [
+            {
+              uri,
+              mimeType: 'text/plain',
+              text: `Error reading Git information: ${error}`,
+            },
+          ],
+        };
+      }
     });
 
     // Handle tool listing
@@ -137,6 +172,34 @@ class GitHistoryMCPServer {
       lines.push('\nworking directory is clean');
     }
     
+    return lines.join('\n');
+  }
+
+  private formatCommitHistory(commits: GitCommit[], limit: number): string {
+    if (commits.length === 0) {
+      return 'no commits found in repository';
+    }
+
+    const lines: string[] = [];
+    lines.push(`recent commits (showing ${commits.length} of last ${limit}):`);
+    lines.push('');
+
+    commits.forEach((commit, index) => {
+      const shortHash = commit.hash.substring(0, 7);
+      const date = new Date(commit.date).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      
+      lines.push(`${index + 1}. ${shortHash} - ${commit.message}`);
+      lines.push(`   Author: ${commit.author} (${commit.email})`);
+      lines.push(`   Date: ${date}`);
+      lines.push('');
+    });
+
     return lines.join('\n');
   }
 

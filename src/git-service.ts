@@ -1,5 +1,6 @@
 import { simpleGit, SimpleGit, StatusResult } from 'simple-git';
 import { resolve } from 'path';
+import { GitCommit } from './types.js';
 
 export interface GitStatus {
   currentBranch: string | null;
@@ -91,5 +92,30 @@ export class GitService {
       isRepo: true,
       currentBranch: status.currentBranch,
     };
+  }
+
+  async getRecentCommits(limit: number = 10): Promise<GitCommit[]> {
+    try {
+      const log = await this.git.log({
+        maxCount: limit,
+        format: {
+          hash: '%H',
+          date: '%ai',
+          message: '%s',
+          author_name: '%an',
+          author_email: '%ae',
+        },
+      });
+
+      return log.all.map(commit => ({
+        hash: commit.hash,
+        date: commit.date,
+        message: commit.message,
+        author: commit.author_name,
+        email: commit.author_email,
+      }));
+    } catch (error) {
+      throw new Error(`Failed to get commit history: ${error}`);
+    }
   }
 }

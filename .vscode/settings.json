@@ -1,0 +1,11 @@
+{
+  "modelcontextprotocol.serverConfigurations": [
+    {
+      "id": "git-history-mcp",
+      "name": "Git History MCP",
+      "enabled": true,
+      "command": "node",
+      "args": ["${workspaceFolder}/dist/index.js"]
+    }
+  ]
+}

@@ -398,4 +398,158 @@ export class GitService {
       throw new Error(`failed to get code ownership information for ${path}: ${error}`);
     }
   }
+
+  async getFileContributors(filePath: string): Promise<Array<{
+    author: string;
+    email: string;
+    commits: number;
+    additions: number;
+    deletions: number;
+  }>> {
+    try {
+      // get detailed stats with numstat
+      const numstat = await this.git.raw([
+        'log', 
+        '--numstat', 
+        '--format="%H %an %ae %at"', 
+        '--', 
+        filePath
+      ]);
+
+      const authorMap = new Map<string, {
+        email: string;
+        commits: number;
+        additions: number;
+        deletions: number;
+      }>();
+
+      const lines = numstat.split('\n');
+      let currentAuthor = '';
+      let currentEmail = '';
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        if (!line) continue; //empty lines
+        
+        // lines with commit info start with a hash
+        if (line.startsWith('"') && line.includes(' ')) {
+          const parts = line.substring(1).split(' ');
+          if (parts.length >= 3) {
+            currentAuthor = parts[1] + " " + parts[2];
+            currentEmail = parts[3];
+            
+            if (!authorMap.has(currentAuthor)) {
+              authorMap.set(currentAuthor, {
+                email: currentEmail,
+                commits: 0,
+                additions: 0,
+                deletions: 0
+              });
+            }
+            
+            const authorInfo = authorMap.get(currentAuthor)!;
+            authorInfo.commits += 1;
+            authorMap.set(currentAuthor, authorInfo);
+          }
+        } 
+        // lines with stats have format: <additions> <deletions> <file>
+        else if (line.match(/^\d+\s+\d+\s+/)) {
+          const [adds, dels] = line.split(/\s+/).map(n => parseInt(n));
+          
+          if (!isNaN(adds) && !isNaN(dels) && authorMap.has(currentAuthor)) {
+            const authorInfo = authorMap.get(currentAuthor)!;
+            authorInfo.additions += adds;
+            authorInfo.deletions += dels;
+            authorMap.set(currentAuthor, authorInfo);
+          }
+        }
+      }
+
+      // convert map to array and sort by commit count
+      return Array.from(authorMap.entries())
+        .map(([author, info]) => ({
+          author,
+          email: info.email,
+          commits: info.commits,
+          additions: info.additions,
+          deletions: info.deletions
+        }))
+        .sort((a, b) => b.commits - a.commits);
+    } catch (error) {
+      throw new Error(`failed to get file contributors for ${filePath}: ${error}`);
+    }
+  }
+
+  async getFileLifecycle(filePath: string): Promise<{
+    creationDate: string;
+    changeFrequency: string;
+    hotspots: Array<{
+      commit: string;
+      date: string;
+      message: string;
+    }>;
+  }> {
+    try {
+      const history = await this.getFileHistory(filePath);
+      
+      const oldestCommit = history.commits[history.commits.length - 1] || null;
+      
+      const now = new Date();
+      const commits30 = history.commits.filter(c => {
+        const commitDate = new Date(c.date);
+        const daysDiff = (now.getTime() - commitDate.getTime()) / (1000 * 60 * 60 * 24);
+        return daysDiff <= 30;
+      }).length;
+      
+      const commits90 = history.commits.filter(c => {
+        const commitDate = new Date(c.date);
+        const daysDiff = (now.getTime() - commitDate.getTime()) / (1000 * 60 * 60 * 24);
+        return daysDiff <= 90;
+      }).length;
+      
+      const commitsYear = history.commits.filter(c => {
+        const commitDate = new Date(c.date);
+        const daysDiff = (now.getTime() - commitDate.getTime()) / (1000 * 60 * 60 * 24);
+        return daysDiff <= 365;
+      }).length;
+      
+      // Calculate frequency description
+      let frequencyDescription = "inactive";
+      if (commits30 > 10) {
+        frequencyDescription = "very active (10+ changes in last month)";
+      } else if (commits30 > 5) {
+        frequencyDescription = "active (5+ changes in last month)";
+      } else if (commits90 > 10) {
+        frequencyDescription = "moderately active (10+ changes in last quarter)";
+      } else if (commitsYear > 10) {
+        frequencyDescription = "occasionally modified (10+ changes in last year)";
+      } else if (commitsYear > 0) {
+        frequencyDescription = "rarely modified (less than 10 changes in last year)";
+      }
+      
+      // Find most significant commits (by diff size or important messages)
+      const significantCommits = history.commits
+        .filter(commit => {
+          // Consider commits with important-sounding messages as significant
+          const importantPrefixes = ['add', 'fix', 'feature', 'refactor', 'rewrite', 'implement'];
+          const message = commit.message.toLowerCase();
+          return importantPrefixes.some(prefix => message.startsWith(prefix));
+        })
+        .slice(0, 5) // yop 5 significant commits
+        .map(commit => ({
+          commit: commit.hash,
+          date: commit.date,
+          message: commit.message
+        }));
+      
+      return {
+        creationDate: oldestCommit ? oldestCommit.date : '',
+        changeFrequency: frequencyDescription,
+        hotspots: significantCommits,
+      };
+    } catch (error) {
+      throw new Error(`failed to get file lifecycle information for ${filePath}: ${error}`);
+    }
+  }
 }

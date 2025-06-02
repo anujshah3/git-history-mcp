@@ -27,3 +27,21 @@ export interface MCPError extends Error {
   code?: string;
   details?: any;
 }
+
+export interface GitFileContributor {
+  author: string;
+  email: string;
+  commits: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitFileLifecycle {
+  creationDate: string;
+  changeFrequency: string;
+  hotspots: Array<{
+    commit: string;
+    date: string;
+    message: string;
+  }>;
+}

@@ -108,6 +108,24 @@ class GitHistoryMCPServer {
               { name: 'path', description: 'Path to the file or directory (relative to repository root)', required: true },
             ],
           },
+          {
+            uri: 'git://file/contributors',
+            mimeType: 'text/plain',
+            name: 'File Contributors',
+            description: 'List of all contributors to a specific file with their activity information',
+            parameters: [
+              { name: 'path', description: 'Path to the file (relative to repository root)', required: true },
+            ],
+          },
+          {
+            uri: 'git://file/lifecycle',
+            mimeType: 'text/plain',
+            name: 'File Lifecycle',
+            description: 'Detailed lifecycle information for a file including creation date, change frequency, and significant changes',
+            parameters: [
+              { name: 'path', description: 'Path to the file (relative to repository root)', required: true },
+            ],
+          },
         ],
       };
     });
@@ -286,6 +304,46 @@ class GitHistoryMCPServer {
                 uri,
                 mimeType: 'text/plain',
                 text: ownershipText,
+              },
+            ],
+          };
+        }
+
+        if (uri.startsWith('git://file/contributors')) {
+          const filePath = queryParams.get('path');
+          if (!filePath) {
+            throw new Error('Missing required parameter: path');
+          }
+          
+          const contributors = await this.gitService.getFileContributors(filePath);
+          const contributorsText = this.formatFileContributors(filePath, contributors);
+          
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: contributorsText,
+              },
+            ],
+          };
+        }
+
+        if (uri.startsWith('git://file/lifecycle')) {
+          const filePath = queryParams.get('path');
+          if (!filePath) {
+            throw new Error('Missing required parameter: path');
+          }
+          
+          const lifecycleInfo = await this.gitService.getFileLifecycle(filePath);
+          const lifecycleText = this.formatFileLifecycle(filePath, lifecycleInfo);
+          
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: lifecycleText,
               },
             ],
           };
@@ -580,6 +638,90 @@ class GitHistoryMCPServer {
       lines.push(`${author} | ${email} | ${linesChanged} | ${percentage}`);
     });
 
+    return lines.join('\n');
+  }
+
+  private formatFileContributors(filePath: string, contributors: Array<{
+    author: string;
+    email: string;
+    commits: number;
+    additions: number;
+    deletions: number;
+  }>): string {
+    if (contributors.length === 0) {
+      return `No contributors found for file: ${filePath}`;
+    }
+
+    const lines: string[] = [];
+    lines.push(`Contributors to: ${filePath}`);
+    lines.push(`Total contributors: ${contributors.length}`);
+    lines.push('');
+    lines.push('Author | Email | Commits | Lines Added | Lines Deleted | Impact');
+    lines.push('-'.repeat(100));
+
+    contributors.forEach((contributor, index) => {
+      const author = contributor.author.length > 20 ? contributor.author.substring(0, 17) + '...' : contributor.author.padEnd(20);
+      const email = contributor.email.length > 25 ? contributor.email.substring(0, 22) + '...' : contributor.email.padEnd(25);
+      const commits = contributor.commits.toString().padStart(7);
+      const additions = contributor.additions.toString().padStart(10);
+      const deletions = contributor.deletions.toString().padStart(12);
+      
+      // Calculate impact score (simple metric: additions + deletions)
+      const impact = contributor.additions + contributor.deletions;
+      const impactStr = impact.toString().padStart(6);
+      
+      lines.push(`${author} | ${email} | ${commits} | ${additions} | ${deletions} | ${impactStr}`);
+    });
+
+    return lines.join('\n');
+  }
+
+  private formatFileLifecycle(filePath: string, lifecycle: {
+    creationDate: string;
+    changeFrequency: string;
+    hotspots: Array<{
+      commit: string;
+      date: string;
+      message: string;
+    }>;
+  }): string {
+    const lines: string[] = [];
+    lines.push(`File Lifecycle Information for: ${filePath}`);
+    lines.push('');
+    
+    const creationDate = lifecycle.creationDate 
+      ? new Date(lifecycle.creationDate).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        }) 
+      : 'Unknown';
+    
+    lines.push(`Created: ${creationDate}`);
+    lines.push(`Change Frequency: ${lifecycle.changeFrequency}`);
+    lines.push('');
+    
+    if (lifecycle.hotspots.length > 0) {
+      lines.push('Significant commits:');
+      lines.push('-'.repeat(80));
+      
+      lifecycle.hotspots.forEach((hotspot, index) => {
+        const shortHash = hotspot.commit.substring(0, 7);
+        const date = new Date(hotspot.date).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        });
+        
+        lines.push(`${index + 1}. ${shortHash} (${date}): ${hotspot.message}`);
+      });
+    } else {
+      lines.push('No significant commits found');
+    }
+    
+    lines.push('');
+    lines.push('File lifecycle analysis helps understand the evolution and maintenance patterns of code.');
+    
     return lines.join('\n');
   }
 

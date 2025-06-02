@@ -552,4 +552,198 @@ export class GitService {
       throw new Error(`failed to get file lifecycle information for ${filePath}: ${error}`);
     }
   }
+
+  async searchRepo(pattern: string, path?: string): Promise<Array<{
+    file: string;
+    line: number;
+    content: string;
+  }>> {
+    try {
+      const args = ['grep', '-n', pattern];
+      
+      if (path) {
+        args.push('--', path);
+      }
+      
+      const result = await this.git.raw(args);
+      const lines = result.split('\n').filter(line => line.trim().length > 0);
+      
+      return lines.map(line => {
+        const [file, lineNumStr, ...contentParts] = line.split(':');
+        const content = contentParts.join(':');
+        
+        return {
+          file,
+          line: parseInt(lineNumStr, 10),
+          content: content.trim(),
+        };
+      });
+    } catch (error) {
+      throw new Error(`Failed to search repository: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async getBranches(): Promise<{
+    branches: Array<{
+      name: string;
+      current: boolean;
+      remote?: string;
+      lastCommit?: GitCommit;
+    }>;
+    current: string;
+    all: string[];
+  }> {
+    try {
+      const branchSummary = await this.git.branch();
+      const branches: Array<{
+        name: string;
+        current: boolean;
+        remote?: string;
+        lastCommit?: GitCommit;
+      }> = [];
+      
+      await Promise.all(
+        Object.entries(branchSummary.branches).map(async ([name, branch]) => {
+          if (branch.name.includes('/')) return;
+          
+          try {
+            const commits = await this.git.log({
+              from: branch.name,
+              maxCount: 1,
+              format: {
+                hash: '%H',
+                date: '%ai',
+                message: '%s',
+                author_name: '%an',
+                author_email: '%ae',
+              },
+            });
+            
+            let lastCommit: GitCommit | undefined;
+            
+            if (commits.all.length > 0) {
+              const commit = commits.all[0];
+              lastCommit = {
+                hash: commit.hash,
+                date: commit.date,
+                message: commit.message,
+                author: commit.author_name,
+                email: commit.author_email,
+              };
+            }
+            
+            branches.push({
+              name: branch.name,
+              current: branch.current,
+              lastCommit,
+            });
+          } catch (error) {
+            branches.push({
+              name: branch.name,
+              current: branch.current,
+            });
+          }
+        })
+      );
+      
+      return {
+        branches: branches.sort((a, b) => a.current ? -1 : (b.current ? 1 : 0)),
+        current: branchSummary.current,
+        all: branchSummary.all,
+      };
+    } catch (error) {
+      throw new Error(`Failed to get branch information: ${error}`);
+    }
+  }
+
+  async compareBranches(from: string, to: string): Promise<{
+    files: Array<{
+      file: string;
+      changes: number;
+      insertions: number;
+      deletions: number;
+      binary: boolean;
+    }>;
+    summary: {
+      changes: number;
+      insertions: number;
+      deletions: number;
+    };
+  }> {
+    try {
+      const diffSummary = await this.git.diffSummary([from, to]);
+      
+      return {
+        files: diffSummary.files.map(file => ({
+          file: file.file,
+          changes: 'changes' in file ? file.changes : 0,
+          insertions: 'insertions' in file ? file.insertions : 0,
+          deletions: 'deletions' in file ? file.deletions : 0,
+          binary: file.binary || false,
+        })),
+        summary: {
+          changes: diffSummary.changed,
+          insertions: diffSummary.insertions,
+          deletions: diffSummary.deletions,
+        },
+      };
+    } catch (error) {
+      throw new Error(`Failed to compare branches: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async getRepoStats(): Promise<{
+    totalCommits: number;
+    totalFiles: number;
+    contributors: Array<{
+      name: string;
+      email: string;
+      commits: number;
+    }>;
+    activeDays: number;
+    firstCommitDate: string;
+    lastCommitDate: string;
+  }> {
+    try {
+      const commitCount = await this.git.raw(['rev-list', '--count', 'HEAD']);
+      const fileList = await this.git.raw(['ls-files']);
+      const fileCount = fileList.split('\n').filter(f => f.trim().length > 0).length;
+      const shortLog = await this.git.raw(['shortlog', '-sne', 'HEAD']);
+      const contributorLines = shortLog.split('\n').filter(line => line.trim().length > 0);
+      
+      const contributors = contributorLines.map(line => {
+        // Format is: number\tName <email>
+        const match = line.trim().match(/^\s*(\d+)\s+(.+?)\s+<(.+?)>$/);
+        if (match) {
+          return {
+            commits: parseInt(match[1], 10),
+            name: match[2],
+            email: match[3],
+          };
+        }
+        return null;
+      }).filter(Boolean) as Array<{
+        name: string;
+        email: string;
+        commits: number;
+      }>;
+      
+      const firstCommit = await this.git.raw(['log', '--reverse', '--format=%ai', '--max-count=1']);
+      const lastCommit = await this.git.raw(['log', '--format=%ai', '--max-count=1']);
+      
+      const activeDaysRaw = await this.git.raw(['log', '--format=%ad', '--date=short']);
+      const activeDays = new Set(activeDaysRaw.split('\n').filter(d => d.trim().length > 0)).size;
+      
+      return {
+        totalCommits: parseInt(commitCount.trim(), 10),
+        totalFiles: fileCount,
+        contributors,
+        activeDays,
+        firstCommitDate: firstCommit.trim(),
+        lastCommitDate: lastCommit.trim(),
+      };
+    } catch (error) {
+      throw new Error(`Failed to get repository stats: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }

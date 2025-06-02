@@ -1,6 +1,6 @@
 {
   "name": "git-history-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Model Context Protocol server for Git history and repository context",
   "main": "dist/index.js",
   "type": "module",

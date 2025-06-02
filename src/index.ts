@@ -18,7 +18,7 @@ class GitHistoryMCPServer {
     this.server = new Server(
       {
         name: 'git-history-mcp',
-        version: '0.2.0',
+        version: '0.3.0',
       },
       {
         capabilities: {
@@ -124,6 +124,38 @@ class GitHistoryMCPServer {
             description: 'Detailed lifecycle information for a file including creation date, change frequency, and significant changes',
             parameters: [
               { name: 'path', description: 'Path to the file (relative to repository root)', required: true },
+            ],
+          },
+          {
+            uri: 'git://branches',
+            mimeType: 'text/plain',
+            name: 'Branch Information',
+            description: 'List of branches with their last commit information',
+          },
+          {
+            uri: 'git://stats',
+            mimeType: 'text/plain',
+            name: 'Repository Statistics',
+            description: 'Overall statistics about the repository including commit count, file count, and contributors',
+          },
+          {
+            uri: 'git://compare',
+            mimeType: 'text/plain',
+            name: 'Branch Comparison',
+            description: 'Compare two branches or commits and see the differences',
+            parameters: [
+              { name: 'from', description: 'The source branch or commit', required: true },
+              { name: 'to', description: 'The target branch or commit (defaults to current HEAD)', required: false },
+            ],
+          },
+          {
+            uri: 'git://search',
+            mimeType: 'text/plain',
+            name: 'Code Search',
+            description: 'Search for a pattern in the repository',
+            parameters: [
+              { name: 'query', description: 'The search pattern to look for', required: true },
+              { name: 'path', description: 'Path to search within (optional)', required: false },
             ],
           },
         ],
@@ -344,6 +376,78 @@ class GitHistoryMCPServer {
                 uri,
                 mimeType: 'text/plain',
                 text: lifecycleText,
+              },
+            ],
+          };
+        }
+
+        if (uri.startsWith('git://branches')) {
+          const branches = await this.gitService.getBranches();
+          const branchesText = this.formatBranchInfo(branches);
+          
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: branchesText,
+              },
+            ],
+          };
+        }
+
+        if (uri.startsWith('git://stats')) {
+          const stats = await this.gitService.getRepoStats();
+          const statsText = this.formatRepoStats(stats);
+          
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: statsText,
+              },
+            ],
+          };
+        }
+
+        if (uri.startsWith('git://compare')) {
+          const from = queryParams.get('from');
+          if (!from) {
+            throw new Error('Missing required parameter: from');
+          }
+          
+          const to = queryParams.get('to') || 'HEAD';
+          const comparison = await this.gitService.compareBranches(from, to);
+          const comparisonText = this.formatBranchComparison(comparison, from, to);
+          
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: comparisonText,
+              },
+            ],
+          };
+        }
+
+        if (uri.startsWith('git://search')) {
+          const query = queryParams.get('query');
+          if (!query) {
+            throw new Error('Missing required parameter: query');
+          }
+          
+          const path = queryParams.get('path') || undefined;
+          const searchResults = await this.gitService.searchRepo(query, path);
+          const searchText = this.formatSearchResults(searchResults, query, path);
+          
+          return {
+            contents: [
+              {
+                uri,
+                mimeType: 'text/plain',
+                text: searchText,
               },
             ],
           };
@@ -721,6 +825,206 @@ class GitHistoryMCPServer {
     
     lines.push('');
     lines.push('File lifecycle analysis helps understand the evolution and maintenance patterns of code.');
+    
+    return lines.join('\n');
+  }
+
+  private formatBranchInfo(branchInfo: {
+    branches: Array<{
+      name: string;
+      current: boolean;
+      remote?: string;
+      lastCommit?: GitCommit;
+    }>;
+    current: string;
+    all: string[];
+  }): string {
+    const lines: string[] = [];
+    lines.push(`Branch Information`);
+    lines.push(`Total branches: ${branchInfo.all.length}`);
+    lines.push(`Current branch: ${branchInfo.current}`);
+    lines.push('');
+    lines.push('Name | Current | Last Commit | Author | Date');
+    lines.push('-'.repeat(100));
+
+    branchInfo.branches.forEach((branch) => {
+      const indicator = branch.current ? '✓' : ' ';
+      const commitHash = branch.lastCommit ? branch.lastCommit.hash.substring(0, 7) : 'N/A';
+      const commitMsg = branch.lastCommit 
+        ? (branch.lastCommit.message.length > 40 
+          ? branch.lastCommit.message.substring(0, 37) + '...' 
+          : branch.lastCommit.message)
+        : 'N/A';
+      const author = branch.lastCommit ? branch.lastCommit.author : 'N/A';
+      const date = branch.lastCommit 
+        ? new Date(branch.lastCommit.date).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })
+        : 'N/A';
+      
+      lines.push(`${branch.name.padEnd(20)} | ${indicator} | ${commitHash} ${commitMsg.padEnd(40)} | ${author.padEnd(15)} | ${date}`);
+    });
+
+    return lines.join('\n');
+  }
+
+  private formatRepoStats(stats: {
+    totalCommits: number;
+    totalFiles: number;
+    contributors: Array<{
+      name: string;
+      email: string;
+      commits: number;
+    }>;
+    activeDays: number;
+    firstCommitDate: string;
+    lastCommitDate: string;
+  }): string {
+    const lines: string[] = [];
+    lines.push(`Repository Statistics`);
+    lines.push('');
+    
+    const firstDate = new Date(stats.firstCommitDate).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    
+    const lastDate = new Date(stats.lastCommitDate).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    
+    lines.push(`Total commits: ${stats.totalCommits}`);
+    lines.push(`Total files: ${stats.totalFiles}`);
+    lines.push(`Contributors: ${stats.contributors.length}`);
+    lines.push(`Active days: ${stats.activeDays}`);
+    lines.push(`First commit: ${firstDate}`);
+    lines.push(`Last commit: ${lastDate}`);
+    lines.push(`Repository age: ${this.calculateRepoAge(stats.firstCommitDate, stats.lastCommitDate)}`);
+    lines.push('');
+    
+    lines.push('Top contributors:');
+    lines.push('Name | Email | Commits');
+    lines.push('-'.repeat(80));
+    
+    stats.contributors
+      .sort((a, b) => b.commits - a.commits)
+      .slice(0, 5)
+      .forEach(contributor => {
+        const name = contributor.name.length > 20 ? contributor.name.substring(0, 17) + '...' : contributor.name.padEnd(20);
+        const email = contributor.email.length > 30 ? contributor.email.substring(0, 27) + '...' : contributor.email.padEnd(30);
+        const commits = contributor.commits.toString().padStart(7);
+        
+        lines.push(`${name} | ${email} | ${commits}`);
+      });
+    
+    return lines.join('\n');
+  }
+
+  private calculateRepoAge(firstCommitDate: string, lastCommitDate: string): string {
+    const first = new Date(firstCommitDate);
+    const last = new Date(lastCommitDate);
+    const diffTime = Math.abs(last.getTime() - first.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays < 30) {
+      return `${diffDays} days`;
+    } else if (diffDays < 365) {
+      const months = Math.floor(diffDays / 30);
+      return `${months} months`;
+    } else {
+      const years = Math.floor(diffDays / 365);
+      const remainingMonths = Math.floor((diffDays % 365) / 30);
+      return `${years} years, ${remainingMonths} months`;
+    }
+  }
+
+  private formatBranchComparison(comparison: {
+    files: Array<{
+      file: string;
+      changes: number;
+      insertions: number;
+      deletions: number;
+      binary: boolean;
+    }>;
+    summary: {
+      changes: number;
+      insertions: number;
+      deletions: number;
+    };
+  }, from: string, to: string): string {
+    const lines: string[] = [];
+    lines.push(`Branch Comparison: ${from} → ${to}`);
+    lines.push('');
+    lines.push(`Changes: ${comparison.summary.changes} files modified`);
+    lines.push(`Insertions: ${comparison.summary.insertions} lines added`);
+    lines.push(`Deletions: ${comparison.summary.deletions} lines removed`);
+    lines.push('');
+    
+    if (comparison.files.length > 0) {
+      lines.push('Modified Files:');
+      lines.push('File | Changes | Insertions | Deletions');
+      lines.push('-'.repeat(80));
+      
+      comparison.files.forEach(file => {
+        const fileName = file.file.length > 40 ? file.file.substring(0, 37) + '...' : file.file.padEnd(40);
+        const changes = file.changes.toString().padStart(7);
+        const insertions = file.insertions.toString().padStart(10);
+        const deletions = file.deletions.toString().padStart(9);
+        
+        lines.push(`${fileName} | ${changes} | ${insertions} | ${deletions}`);
+      });
+    } else {
+      lines.push('No differences found between the specified references.');
+    }
+    
+    return lines.join('\n');
+  }
+
+  private formatSearchResults(results: Array<{
+    file: string;
+    line: number;
+    content: string;
+  }>, query: string, path?: string): string {
+    const lines: string[] = [];
+    lines.push(`Search Results for: "${query}"`);
+    if (path) {
+      lines.push(`Path: ${path}`);
+    }
+    lines.push(`Matches found: ${results.length}`);
+    lines.push('');
+    
+    if (results.length === 0) {
+      lines.push('No matches found.');
+      return lines.join('\n');
+    }
+    
+    const fileGroups = new Map<string, Array<{ line: number; content: string }>>();
+    
+    results.forEach(result => {
+      if (!fileGroups.has(result.file)) {
+        fileGroups.set(result.file, []);
+      }
+      fileGroups.get(result.file)!.push({
+        line: result.line,
+        content: result.content,
+      });
+    });
+    
+    Array.from(fileGroups.entries()).forEach(([file, matches]) => {
+      lines.push(`File: ${file}`);
+      lines.push('-'.repeat(80));
+      
+      matches.forEach(match => {
+        lines.push(`Line ${match.line}: ${match.content}`);
+      });
+      
+      lines.push('');
+    });
     
     return lines.join('\n');
   }

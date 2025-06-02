@@ -45,3 +45,30 @@ export interface GitFileLifecycle {
     message: string;
   }>;
 }
+
+export interface GitDiffResult {
+  files: Array<{
+    file: string;
+    changes: number;
+    insertions: number;
+    deletions: number;
+    binary: boolean;
+  }>;
+  summary: {
+    changes: number;
+    insertions: number;
+    deletions: number;
+  };
+}
+
+export interface GitSearchResult {
+  file: string;
+  line: number;
+  content: string;
+}
+
+export interface GitBranchSummary {
+  branches: GitBranch[];
+  current: string;
+  all: string[];
+}
